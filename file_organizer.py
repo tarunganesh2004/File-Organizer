@@ -6,8 +6,8 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
 # Configuration
-WATCH_DIR = "C:\Users\emada\Downloads\File-Organizer"  # Change to your folder
-SORT_DIR = "C:\Users\emada\Downloads\test"  # Destination folder
+WATCH_DIR = r"C:\Users\emada\Downloads"  # Change to your folder
+SORT_DIR = r"C:\Users\emada\Downloads\test"  # Destination folder
 LOG_FILE = "logs.txt"
 UNDO_FILE = "config.json"
 
