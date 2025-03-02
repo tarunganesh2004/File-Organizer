@@ -2,14 +2,30 @@ import os
 import shutil
 import json
 import time
+import threading
+import tkinter as tk
+from tkinter import filedialog, messagebox
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
-# Configuration
-WATCH_DIR = r"C:\Users\emada\Downloads"  # Change to your folder
-SORT_DIR = r"C:\Users\emada\Downloads\test"  # Destination folder
-LOG_FILE = "logs.txt"
-UNDO_FILE = "config.json"
+# Default Configurations
+CONFIG_FILE = "config.json"
+DEFAULT_CONFIG = {"watch_dir": "", "sort_dir": ""}
+
+
+# Load Configuration
+def load_config():
+    if os.path.exists(CONFIG_FILE):
+        with open(CONFIG_FILE, "r") as file:
+            return json.load(file)
+    return DEFAULT_CONFIG
+
+
+# Save Configuration
+def save_config(config):
+    with open(CONFIG_FILE, "w") as file:
+        json.dump(config, file, indent=4)
+
 
 # File Categories
 FILE_TYPES = {
@@ -21,96 +37,138 @@ FILE_TYPES = {
     "Others": [],
 }
 
-
-# Load undo history
-def load_undo():
-    if os.path.exists(UNDO_FILE):
-        with open(UNDO_FILE, "r") as file:
-            return json.load(file)
-    return {}
+config = load_config()
 
 
-# Save undo history
-def save_undo(data):
-    with open(UNDO_FILE, "w") as file:
-        json.dump(data, file, indent=4)
+class FileOrganizerApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("File Organizer")
+        self.root.geometry("400x300")
 
+        # Folder Selection
+        tk.Label(root, text="Watch Folder:").pack()
+        self.watch_dir_entry = tk.Entry(root, width=40)
+        self.watch_dir_entry.pack()
+        self.watch_dir_entry.insert(0, config["watch_dir"])
+        tk.Button(root, text="Browse", command=self.select_watch_folder).pack()
 
-# Logging function
-def log_action(action):
-    with open(LOG_FILE, "a") as log:
-        log.write(f"{time.ctime()}: {action}\n")
+        tk.Label(root, text="Sort Folder:").pack()
+        self.sort_dir_entry = tk.Entry(root, width=40)
+        self.sort_dir_entry.pack()
+        self.sort_dir_entry.insert(0, config["sort_dir"])
+        tk.Button(root, text="Browse", command=self.select_sort_folder).pack()
 
-
-# Sorting logic
-def sort_files():
-    undo_data = {}
-
-    for filename in os.listdir(WATCH_DIR):
-        file_path = os.path.join(WATCH_DIR, filename)
-        if not os.path.isfile(file_path):
-            continue
-
-        file_ext = os.path.splitext(filename)[1].lower()
-        category = next(
-            (key for key, exts in FILE_TYPES.items() if file_ext in exts), "Others"
+        # Buttons
+        tk.Button(root, text="Sort Files Now", command=self.sort_files).pack(pady=5)
+        tk.Button(root, text="Start Monitoring", command=self.start_monitoring).pack(
+            pady=5
         )
+        tk.Button(root, text="Stop Monitoring", command=self.stop_monitoring).pack(
+            pady=5
+        )
+        tk.Button(root, text="Undo Last Sort", command=self.undo_last).pack(pady=5)
 
-        target_folder = os.path.join(SORT_DIR, category)
-        os.makedirs(target_folder, exist_ok=True)
+        # Status Log
+        self.status_label = tk.Label(root, text="Status: Ready", fg="green")
+        self.status_label.pack()
 
-        new_path = os.path.join(target_folder, filename)
-        shutil.move(file_path, new_path)
-        undo_data[new_path] = file_path
-        log_action(f"Moved: {file_path} -> {new_path}")
+        self.observer = None
 
-    save_undo(undo_data)
-    print("Sorting complete!")
+    def select_watch_folder(self):
+        folder = filedialog.askdirectory()
+        if folder:
+            self.watch_dir_entry.delete(0, tk.END)
+            self.watch_dir_entry.insert(0, folder)
+            config["watch_dir"] = folder
+            save_config(config)
+
+    def select_sort_folder(self):
+        folder = filedialog.askdirectory()
+        if folder:
+            self.sort_dir_entry.delete(0, tk.END)
+            self.sort_dir_entry.insert(0, folder)
+            config["sort_dir"] = folder
+            save_config(config)
+
+    def sort_files(self):
+        watch_dir = self.watch_dir_entry.get()
+        sort_dir = self.sort_dir_entry.get()
+
+        if not os.path.exists(watch_dir) or not os.path.exists(sort_dir):
+            messagebox.showerror("Error", "Invalid directories!")
+            return
+
+        undo_data = {}
+        for filename in os.listdir(watch_dir):
+            file_path = os.path.join(watch_dir, filename)
+            if not os.path.isfile(file_path):
+                continue
+
+            file_ext = os.path.splitext(filename)[1].lower()
+            category = next(
+                (key for key, exts in FILE_TYPES.items() if file_ext in exts), "Others"
+            )
+
+            target_folder = os.path.join(sort_dir, category)
+            os.makedirs(target_folder, exist_ok=True)
+
+            new_path = os.path.join(target_folder, filename)
+            shutil.move(file_path, new_path)
+            undo_data[new_path] = file_path
+
+        save_config({"undo": undo_data})
+        self.status_label.config(text="Status: Files Sorted", fg="blue")
+        messagebox.showinfo("Success", "Files sorted successfully!")
+
+    def start_monitoring(self):
+        if self.observer:
+            return
+
+        watch_dir = self.watch_dir_entry.get()
+        if not os.path.exists(watch_dir):
+            messagebox.showerror("Error", "Invalid watch directory!")
+            return
+
+        self.observer = Observer()
+        event_handler = FileHandler(self)
+        self.observer.schedule(event_handler, watch_dir, recursive=False)
+        self.observer.start()
+        self.status_label.config(text="Status: Monitoring...", fg="orange")
+        threading.Thread(target=self.run_observer, daemon=True).start()
+
+    def stop_monitoring(self):
+        if self.observer:
+            self.observer.stop()
+            self.observer = None
+            self.status_label.config(text="Status: Monitoring Stopped", fg="red")
+
+    def run_observer(self):
+        try:
+            self.observer.join()
+        except Exception:
+            pass
+
+    def undo_last(self):
+        undo_data = load_config().get("undo", {})
+        for new_path, old_path in undo_data.items():
+            if os.path.exists(new_path):
+                shutil.move(new_path, old_path)
+        save_config({"undo": {}})
+        self.status_label.config(text="Status: Undo Complete", fg="green")
+        messagebox.showinfo("Undo", "Files restored to original locations!")
 
 
-# Undo last operation
-def undo_last():
-    undo_data = load_undo()
-    for new_path, old_path in undo_data.items():
-        if os.path.exists(new_path):
-            shutil.move(new_path, old_path)
-            log_action(f"Restored: {new_path} -> {old_path}")
-    save_undo({})
-    print("Undo completed!")
-
-
-# Real-time monitoring class
 class FileHandler(FileSystemEventHandler):
+    def __init__(self, app):
+        self.app = app
+
     def on_created(self, event):
         if not event.is_directory:
-            print(f"Detected new file: {event.src_path}, sorting now...")
-            sort_files()
-
-
-# Start monitoring
-def monitor_folder():
-    event_handler = FileHandler()
-    observer = Observer()
-    observer.schedule(event_handler, WATCH_DIR, recursive=False)
-    observer.start()
-    print(f"Monitoring {WATCH_DIR} for new files...")
-    try:
-        while True:
-            time.sleep(10)
-    except KeyboardInterrupt:
-        observer.stop()
-    observer.join()
+            self.app.sort_files()
 
 
 if __name__ == "__main__":
-    print("1. Sort files now\n2. Monitor folder for changes\n3. Undo last operation")
-    choice = input("Choose an option: ")
-
-    if choice == "1":
-        sort_files()
-    elif choice == "2":
-        monitor_folder()
-    elif choice == "3":
-        undo_last()
-    else:
-        print("Invalid choice!")
+    root = tk.Tk()
+    app = FileOrganizerApp(root)
+    root.mainloop()
